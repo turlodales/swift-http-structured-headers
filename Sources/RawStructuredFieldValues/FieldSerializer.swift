@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-private let validIntegerRange = Int64(-999_999_999_999_999) ... Int64(999_999_999_999_999)
+private let validIntegerRange = Int64(-999_999_999_999_999)...Int64(999_999_999_999_999)
 
 /// A `StructuredFieldValueSerializer` is the basic parsing object for structured header field values.
 public struct StructuredFieldValueSerializer: Sendable {
@@ -45,7 +45,7 @@ extension StructuredFieldValueSerializer {
     /// Writes a structured list header field value.
     ///
     /// - parameters:
-    ///     - root: The list object.
+    ///     - list: The list object.
     /// - throws: If the list could not be serialized.
     /// - returns: The bytes of the serialized header field value.
     public mutating func writeListFieldValue(_ list: [ItemOrInnerList]) throws -> [UInt8] {
@@ -63,7 +63,7 @@ extension StructuredFieldValueSerializer {
     /// Writes a structured item header field value.
     ///
     /// - parameters:
-    ///     - root: The item.
+    ///     - item: The item.
     /// - throws: If the item could not be serialized.
     /// - returns: The bytes of the serialized header field value.
     public mutating func writeItemFieldValue(_ item: Item) throws -> [UInt8] {
@@ -179,7 +179,7 @@ extension StructuredFieldValueSerializer {
             self.data.append(contentsOf: String(decimal).utf8)
         case .string(let string):
             let bytes = string.utf8
-            guard bytes.allSatisfy({ !(0x00 ... 0x1F).contains($0) && $0 != 0x7F && $0 < 0x80 }) else {
+            guard bytes.allSatisfy({ !(0x00...0x1F).contains($0) && $0 != 0x7F && $0 < 0x80 }) else {
                 throw StructuredHeaderError.invalidString
             }
             self.data.append(asciiDquote)
@@ -204,6 +204,38 @@ extension StructuredFieldValueSerializer {
             self.data.append(asciiQuestionMark)
             let character = bool ? asciiOne : asciiZero
             self.data.append(character)
+        case .date(let date):
+            self.data.append(asciiAt)
+
+            // Then, serialize as integer.
+            guard let wideInt = Int64(exactly: date), validIntegerRange.contains(wideInt) else {
+                throw StructuredHeaderError.invalidDate
+            }
+
+            self.data.append(contentsOf: String(date, radix: 10).utf8)
+        case .displayString(let displayString):
+            let bytes = displayString.utf8
+
+            self.data.append(asciiPercent)
+            self.data.append(asciiDquote)
+
+            for byte in bytes {
+                if byte == asciiPercent
+                    || byte == asciiDquote
+                    || (0x00...0x1F).contains(byte)
+                    || (0x7F...).contains(byte)
+                {
+                    self.data.append(asciiPercent)
+
+                    let encodedByte = UInt8.encodeToHex(byte)
+                    self.data.append(encodedByte.firstChar)
+                    self.data.append(encodedByte.secondChar)
+                } else {
+                    self.data.append(byte)
+                }
+            }
+
+            self.data.append(asciiDquote)
         }
     }
 }
@@ -224,7 +256,7 @@ extension String {
         let validKey = utf8View.dropFirst().allSatisfy {
             switch $0 {
             case asciiLowercases, asciiDigits, asciiUnderscore,
-                 asciiDash, asciiPeriod, asciiAsterisk:
+                asciiDash, asciiPeriod, asciiAsterisk:
                 return true
             default:
                 return false
@@ -234,5 +266,20 @@ extension String {
         guard validKey else {
             throw StructuredHeaderError.invalidKey
         }
+    }
+}
+
+extension UInt8 {
+    /// Converts an integer in base 10 to hex of type `EncodedHex`.
+    fileprivate static func encodeToHex(_ int: Self) -> EncodedHex {
+        let firstChar = self.itoh(int >> 4)
+        let secondChar = self.itoh(int & 0x0F)
+
+        return EncodedHex([firstChar, secondChar])
+    }
+
+    /// Converts an integer to its hex character in UTF8.
+    private static func itoh(_ int: Self) -> Self {
+        (int > 9) ? (asciiLowerA + int - 10) : (asciiZero + int)
     }
 }

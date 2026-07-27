@@ -26,12 +26,18 @@ enum FixturesLoader {
     static var parsingFixtures: [StructuredHeaderTestFixture] {
         // ContentsOfDirectory can throw if it hits EINTR, just spin
         var files: [URL]?
-        for _ in 0 ..< 1000 {
+        for _ in 0..<1000 {
             do {
-                files = try FileManager.default.contentsOfDirectory(at: fixturesDirectory, includingPropertiesForKeys: nil, options: [])
+                files = try FileManager.default.contentsOfDirectory(
+                    at: fixturesDirectory,
+                    includingPropertiesForKeys: nil,
+                    options: []
+                )
                 break
             } catch let error as NSError {
-                guard let underlyingError = error.userInfo[NSUnderlyingErrorKey] as? NSError, underlyingError.domain == NSPOSIXErrorDomain, underlyingError.code == EINTR else {
+                guard let underlyingError = error.userInfo[NSUnderlyingErrorKey] as? NSError,
+                    underlyingError.domain == NSPOSIXErrorDomain, underlyingError.code == EINTR
+                else {
                     fatalError("\(error)")
                 }
                 // Ok, we'll continue
@@ -52,12 +58,18 @@ enum FixturesLoader {
     static var serializingFixtures: [StructuredHeaderTestFixture] {
         // ContentsOfDirectory can throw if it hits EINTR, just spin
         var files: [URL]?
-        for _ in 0 ..< 1000 {
+        for _ in 0..<1000 {
             do {
-                files = try FileManager.default.contentsOfDirectory(at: serializationFixturesDirectory, includingPropertiesForKeys: nil, options: [])
+                files = try FileManager.default.contentsOfDirectory(
+                    at: serializationFixturesDirectory,
+                    includingPropertiesForKeys: nil,
+                    options: []
+                )
                 break
             } catch let error as NSError {
-                guard let underlyingError = error.userInfo[NSUnderlyingErrorKey] as? NSError, underlyingError.domain == NSPOSIXErrorDomain, underlyingError.code == EINTR else {
+                guard let underlyingError = error.userInfo[NSUnderlyingErrorKey] as? NSError,
+                    underlyingError.domain == NSPOSIXErrorDomain, underlyingError.code == EINTR
+                else {
                     fatalError("\(error)")
                 }
                 // Ok, we'll continue
@@ -107,7 +119,7 @@ struct StructuredHeaderTestFixture: Decodable {
 enum JSONSchema: Decodable {
     case dictionary([String: JSONSchema])
     case array([JSONSchema])
-    case integer(Int)
+    case integer(Int64)
     case double(Double)
     case string(String)
     case bool(Bool)
@@ -118,7 +130,7 @@ enum JSONSchema: Decodable {
             self = .string(value)
         } else if let bool = try? container.decode(Bool.self) {
             self = .bool(bool)
-        } else if let value = try? container.decode(Int.self) {
+        } else if let value = try? container.decode(Int64.self) {
             self = .integer(value)
         } else if let value = try? container.decode(Double.self) {
             self = .double(value)

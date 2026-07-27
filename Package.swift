@@ -1,4 +1,4 @@
-// swift-tools-version:5.8
+// swift-tools-version:6.1
 //===----------------------------------------------------------------------===//
 //
 // This source file is part of the SwiftNIO open source project
@@ -14,6 +14,20 @@
 //===----------------------------------------------------------------------===//
 import PackageDescription
 
+let strictConcurrencyDevelopment = false
+
+let strictConcurrencySettings: [SwiftSetting] = {
+    var initialSettings: [SwiftSetting] = []
+
+    if strictConcurrencyDevelopment {
+        // -warnings-as-errors here is a workaround so that IDE-based development can
+        // get tripped up on -require-explicit-sendable.
+        initialSettings.append(.unsafeFlags(["-require-explicit-sendable", "-warnings-as-errors"]))
+    }
+
+    return initialSettings
+}()
+
 let package = Package(
     name: "swift-http-structured-headers",
     products: [
@@ -26,25 +40,42 @@ let package = Package(
             targets: ["RawStructuredFieldValues"]
         ),
     ],
-    dependencies: [
-        .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.0.0"),
-    ],
     targets: [
         .target(
             name: "RawStructuredFieldValues",
-            dependencies: []
+            dependencies: [],
+            swiftSettings: strictConcurrencySettings
         ),
         .target(
             name: "StructuredFieldValues",
-            dependencies: ["RawStructuredFieldValues"]
+            dependencies: ["RawStructuredFieldValues"],
+            swiftSettings: strictConcurrencySettings
         ),
         .executableTarget(
             name: "sh-parser",
-            dependencies: ["RawStructuredFieldValues"]
+            dependencies: ["RawStructuredFieldValues"],
+            swiftSettings: strictConcurrencySettings
         ),
         .testTarget(
             name: "StructuredFieldValuesTests",
-            dependencies: ["RawStructuredFieldValues", "StructuredFieldValues"]
+            dependencies: ["RawStructuredFieldValues", "StructuredFieldValues"],
+            swiftSettings: strictConcurrencySettings
         ),
     ]
 )
+
+// ---    STANDARD CROSS-REPO SETTINGS DO NOT EDIT   --- //
+for target in package.targets {
+    switch target.type {
+    case .regular, .test, .executable:
+        var settings = target.swiftSettings ?? []
+        // https://github.com/swiftlang/swift-evolution/blob/main/proposals/0444-member-import-visibility.md
+        settings.append(.enableUpcomingFeature("MemberImportVisibility"))
+        target.swiftSettings = settings
+    case .macro, .plugin, .system, .binary:
+        ()  // not applicable
+    @unknown default:
+        ()  // we don't know what to do here, do nothing
+    }
+}
+// --- END: STANDARD CROSS-REPO SETTINGS DO NOT EDIT --- //

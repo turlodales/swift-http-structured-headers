@@ -62,6 +62,16 @@ extension BareItemDecoder: SingleValueDecodingContainer {
         try self._decodeFixedWidthInteger(type)
     }
 
+    @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+    func decode(_ type: UInt128.Type) throws -> UInt128 {
+        try self._decodeFixedWidthInteger(type)
+    }
+
+    @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+    func decode(_ type: Int128.Type) throws -> Int128 {
+        try self._decodeFixedWidthInteger(type)
+    }
+
     func decode(_ type: UInt.Type) throws -> UInt {
         try self._decodeFixedWidthInteger(type)
     }
@@ -114,9 +124,27 @@ extension BareItemDecoder: SingleValueDecodingContainer {
             throw StructuredHeaderError.invalidTypeForItem
         }
 
-        return Decimal(sign: pseudoDecimal.mantissa > 0 ? .plus : .minus,
-                       exponent: Int(pseudoDecimal.exponent),
-                       significand: Decimal(pseudoDecimal.mantissa.magnitude))
+        return Decimal(
+            sign: pseudoDecimal.mantissa > 0 ? .plus : .minus,
+            exponent: Int(pseudoDecimal.exponent),
+            significand: Decimal(pseudoDecimal.mantissa.magnitude)
+        )
+    }
+
+    func decode(_: Date.Type) throws -> Date {
+        guard case .date(let date) = self.item else {
+            throw StructuredHeaderError.invalidTypeForItem
+        }
+
+        return Date(timeIntervalSince1970: Double(date))
+    }
+
+    func decode(_: DisplayString.Type) throws -> DisplayString {
+        guard case .displayString(let string) = self.item else {
+            throw StructuredHeaderError.invalidTypeForItem
+        }
+
+        return DisplayString(rawValue: string)
     }
 
     func decodeNil() -> Bool {
@@ -158,6 +186,10 @@ extension BareItemDecoder: SingleValueDecodingContainer {
             return try self.decode(Data.self) as! T
         case is Decimal.Type:
             return try self.decode(Decimal.self) as! T
+        case is Date.Type:
+            return try self.decode(Date.self) as! T
+        case is DisplayString.Type:
+            return try self.decode(DisplayString.self) as! T
         default:
             throw StructuredHeaderError.invalidTypeForItem
         }

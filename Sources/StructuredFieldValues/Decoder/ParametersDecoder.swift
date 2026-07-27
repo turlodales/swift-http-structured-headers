@@ -49,18 +49,28 @@ extension ParametersDecoder: KeyedDecodingContainerProtocol {
             self.decoder.pop()
         }
 
-        if type is Data.Type {
+        switch type {
+        case is Data.Type:
             let container = try self.decoder.singleValueContainer()
             return try container.decode(Data.self) as! T
-        } else if type is Decimal.Type {
+        case is Decimal.Type:
             let container = try self.decoder.singleValueContainer()
             return try container.decode(Decimal.self) as! T
-        } else {
+        case is Date.Type:
+            let container = try self.decoder.singleValueContainer()
+            return try container.decode(Date.self) as! T
+        case is DisplayString.Type:
+            let container = try self.decoder.singleValueContainer()
+            return try container.decode(DisplayString.self) as! T
+        default:
             return try type.init(from: self.decoder)
         }
     }
 
-    func nestedContainer<NestedKey: CodingKey>(keyedBy type: NestedKey.Type, forKey key: Key) throws -> KeyedDecodingContainer<NestedKey> {
+    func nestedContainer<NestedKey: CodingKey>(
+        keyedBy type: NestedKey.Type,
+        forKey key: Key
+    ) throws -> KeyedDecodingContainer<NestedKey> {
         try self.decoder.push(_StructuredHeaderCodingKey(key, keyDecodingStrategy: self.decoder.keyDecodingStrategy))
         defer {
             self.decoder.pop()

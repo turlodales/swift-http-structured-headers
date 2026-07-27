@@ -94,7 +94,7 @@ extension BareItem {
             self = .bool(b)
 
         case .integer(let i):
-            self = .integer(i)
+            self = .integer(Int(i))
 
         case .decimal(let d):
             self = .decimal(d)
@@ -107,6 +107,11 @@ extension BareItem {
 
         case .token(let t):
             self = .token(t)
+
+        case .date:
+            throw StructuredHeaderError.invalidItem
+        case .displayString:
+            throw StructuredHeaderError.invalidItem
         }
     }
 }
@@ -121,7 +126,7 @@ public enum RFC9651BareItem: Sendable {
     case bool(Bool)
 
     /// An integer item.
-    case integer(Int)
+    case integer(Int64)
 
     /// A decimal item.
     case decimal(PseudoDecimal)
@@ -135,6 +140,12 @@ public enum RFC9651BareItem: Sendable {
 
     /// A token item.
     case token(String)
+
+    /// A date item.
+    case date(Int64)
+
+    /// A display string item.
+    case displayString(String)
 }
 
 extension RFC9651BareItem: ExpressibleByBooleanLiteral {
@@ -144,7 +155,7 @@ extension RFC9651BareItem: ExpressibleByBooleanLiteral {
 }
 
 extension RFC9651BareItem: ExpressibleByIntegerLiteral {
-    public init(integerLiteral value: Int) {
+    public init(integerLiteral value: Int64) {
         self = .integer(value)
     }
 }
@@ -173,7 +184,7 @@ extension RFC9651BareItem {
             self = .bool(b)
 
         case .integer(let i):
-            self = .integer(i)
+            self = .integer(Int64(i))
 
         case .decimal(let d):
             self = .decimal(d)
@@ -265,7 +276,7 @@ extension BareInnerList: ExpressibleByArrayLiteral {
 
 // TODO: RangeReplaceableCollection I guess
 extension BareInnerList: RandomAccessCollection, MutableCollection {
-    public struct Index {
+    public struct Index: Sendable {
         fileprivate var baseIndex: Array<Item>.Index
 
         init(_ baseIndex: Array<Item>.Index) {
@@ -372,12 +383,12 @@ extension String {
             //                / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
             //                / DIGIT / ALPHA
             //
-            // The following insane case statement covers this. Tokens suck.
+            // The following unfortunate case statement covers this. Tokens; not even once.
             case asciiExclamationMark, asciiOctothorpe, asciiDollar, asciiPercent,
-                 asciiAmpersand, asciiSquote, asciiAsterisk, asciiPlus, asciiDash,
-                 asciiPeriod, asciiCaret, asciiUnderscore, asciiBacktick, asciiPipe,
-                 asciiTilde, asciiDigits, asciiCapitals, asciiLowercases,
-                 asciiColon, asciiSlash:
+                asciiAmpersand, asciiSquote, asciiAsterisk, asciiPlus, asciiDash,
+                asciiPeriod, asciiCaret, asciiUnderscore, asciiBacktick, asciiPipe,
+                asciiTilde, asciiDigits, asciiCapitals, asciiLowercases,
+                asciiColon, asciiSlash:
                 // Good
                 ()
             default:

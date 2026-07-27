@@ -213,7 +213,7 @@ extension StructuredFieldValueParser {
 
         switch first {
         case asciiDash, asciiDigits:
-            return try self._parseAnIntegerOrDecimal()
+            return try self._parseAnIntegerOrDecimal(isDate: false)
         case asciiDquote:
             return try self._parseAString()
         case asciiColon:
@@ -222,13 +222,17 @@ extension StructuredFieldValueParser {
             return try self._parseABoolean()
         case asciiCapitals, asciiLowercases, asciiAsterisk:
             return try self._parseAToken()
+        case asciiAt:
+            return try self._parseADate()
+        case asciiPercent:
+            return try self._parseADisplayString()
         default:
             throw StructuredHeaderError.invalidItem
         }
     }
 
-    private mutating func _parseAnIntegerOrDecimal() throws -> RFC9651BareItem {
-        var sign = 1
+    private mutating func _parseAnIntegerOrDecimal(isDate: Bool) throws -> RFC9651BareItem {
+        var sign = Int64(1)
         var type = IntegerOrDecimal.integer
 
         if let first = self.underlyingData.first, first == asciiDash {
@@ -248,10 +252,19 @@ extension StructuredFieldValueParser {
                 // Do nothing
                 ()
             case asciiPeriod where type == .integer:
+                // If output_date is decimal, fail parsing.
+                if isDate {
+                    throw StructuredHeaderError.invalidDate
+                }
+
                 // If input_number contains more than 12 characters, fail parsing. Otherwise,
                 // set type to decimal and consume.
                 if self.underlyingData.distance(from: self.underlyingData.startIndex, to: index) > 12 {
-                    throw StructuredHeaderError.invalidIntegerOrDecimal
+                    if isDate {
+                        throw StructuredHeaderError.invalidDate
+                    } else {
+                        throw StructuredHeaderError.invalidIntegerOrDecimal
+                    }
                 }
                 type = .decimal
             default:
@@ -268,9 +281,15 @@ extension StructuredFieldValueParser {
             switch type {
             case .integer:
                 if count > 15 {
-                    throw StructuredHeaderError.invalidIntegerOrDecimal
+                    if isDate {
+                        throw StructuredHeaderError.invalidDate
+                    } else {
+                        throw StructuredHeaderError.invalidIntegerOrDecimal
+                    }
                 }
             case .decimal:
+                assert(isDate == false)
+
                 if count > 16 {
                     throw StructuredHeaderError.invalidIntegerOrDecimal
                 }
@@ -285,8 +304,14 @@ extension StructuredFieldValueParser {
         case .integer:
             // This intermediate string is sad, we should rewrite this manually to avoid it.
             // This force-unwrap is safe, as we have validated that all characters are ascii digits.
-            let baseInt = Int(String(decoding: integerBytes, as: UTF8.self), radix: 10)!
-            return .integer(baseInt * sign)
+            let baseInt = Int64(String(decoding: integerBytes, as: UTF8.self), radix: 10)!
+            let resultingInt = baseInt * sign
+
+            if isDate {
+                return .date(resultingInt)
+            } else {
+                return .integer(resultingInt)
+            }
         case .decimal:
             // This must be non-nil, otherwise we couldn't have flipped to the decimal type.
             let periodIndex = integerBytes.firstIndex(of: asciiPeriod)!
@@ -350,7 +375,7 @@ extension StructuredFieldValueParser {
                 // Unquoted dquote, this is the end of the string.
                 endIndex = index
                 break loop
-            case 0x00 ... 0x1F, 0x7F...:
+            case 0x00...0x1F, 0x7F...:
                 // Forbidden bytes in string: string must be VCHAR and SP.
                 throw StructuredHeaderError.invalidString
             default:
@@ -365,7 +390,7 @@ extension StructuredFieldValueParser {
         if endIndex == self.underlyingData.endIndex {
             throw StructuredHeaderError.invalidString
         }
-        let stringSlice = self.underlyingData[self.underlyingData.startIndex ..< index]
+        let stringSlice = self.underlyingData[self.underlyingData.startIndex..<index]
         self.underlyingData.formIndex(after: &index)
         self.underlyingData = self.underlyingData[index...]
 
@@ -426,7 +451,10 @@ extension StructuredFieldValueParser {
     }
 
     private mutating func _parseAToken() throws -> RFC9651BareItem {
-        assert(asciiCapitals.contains(self.underlyingData.first!) || asciiLowercases.contains(self.underlyingData.first!) || self.underlyingData.first! == asciiAsterisk)
+        assert(
+            asciiCapitals.contains(self.underlyingData.first!) || asciiLowercases.contains(self.underlyingData.first!)
+                || self.underlyingData.first! == asciiAsterisk
+        )
 
         var index = self.underlyingData.startIndex
         loop: while index < self.underlyingData.endIndex {
@@ -438,12 +466,12 @@ extension StructuredFieldValueParser {
             //                / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
             //                / DIGIT / ALPHA
             //
-            // The following insane case statement covers this. Tokens suck.
+            // The following unfortunate case statement covers this. Tokens; not even once.
             case asciiExclamationMark, asciiOctothorpe, asciiDollar, asciiPercent,
-                 asciiAmpersand, asciiSquote, asciiAsterisk, asciiPlus, asciiDash,
-                 asciiPeriod, asciiCaret, asciiUnderscore, asciiBacktick, asciiPipe,
-                 asciiTilde, asciiDigits, asciiCapitals, asciiLowercases,
-                 asciiColon, asciiSlash:
+                asciiAmpersand, asciiSquote, asciiAsterisk, asciiPlus, asciiDash,
+                asciiPeriod, asciiCaret, asciiUnderscore, asciiBacktick, asciiPipe,
+                asciiTilde, asciiDigits, asciiCapitals, asciiLowercases,
+                asciiColon, asciiSlash:
                 // Good, consume
                 self.underlyingData.formIndex(after: &index)
             default:
@@ -457,6 +485,86 @@ extension StructuredFieldValueParser {
         let tokenSlice = self.underlyingData[..<index]
         self.underlyingData = self.underlyingData[index...]
         return .token(String(decoding: tokenSlice, as: UTF8.self))
+    }
+
+    private mutating func _parseADate() throws -> RFC9651BareItem {
+        assert(self.underlyingData.first == asciiAt)
+        self.underlyingData.consumeFirst()
+        return try self._parseAnIntegerOrDecimal(isDate: true)
+    }
+
+    private mutating func _parseADisplayString() throws -> RFC9651BareItem {
+        assert(self.underlyingData.first == asciiPercent)
+        self.underlyingData.consumeFirst()
+
+        guard self.underlyingData.first == asciiDquote else {
+            throw StructuredHeaderError.invalidDisplayString
+        }
+
+        self.underlyingData.consumeFirst()
+
+        var byteArray = [UInt8]()
+
+        while let char = self.underlyingData.first {
+            self.underlyingData.consumeFirst()
+
+            switch char {
+            case 0x00...0x1F, 0x7F...:
+                throw StructuredHeaderError.invalidDisplayString
+            case asciiPercent:
+                if self.underlyingData.count < 2 {
+                    throw StructuredHeaderError.invalidDisplayString
+                }
+
+                let octetHex = EncodedHex(self.underlyingData.prefix(2))
+
+                self.underlyingData = self.underlyingData.dropFirst(2)
+
+                guard let octet = octetHex.decode() else {
+                    throw StructuredHeaderError.invalidDisplayString
+                }
+
+                byteArray.append(octet)
+            case asciiDquote:
+                if #available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, visionOS 2.0, *) {
+                    let unicodeSequence = String(validating: byteArray, as: UTF8.self)
+
+                    guard let unicodeSequence else {
+                        throw StructuredHeaderError.invalidDisplayString
+                    }
+
+                    return .displayString(unicodeSequence)
+                } else {
+                    return try _decodeDisplayString(byteArray: &byteArray)
+                }
+            default:
+                byteArray.append(char)
+            }
+        }
+
+        // Fail parsing — reached the end of the string without finding a closing DQUOTE.
+        throw StructuredHeaderError.invalidDisplayString
+    }
+
+    /// This method is called in environments where `String(validating:as:)` is unavailable. It uses
+    /// `String(validatingUTF8:)` which requires `byteArray` to be null terminated. `String(validating:as:)`
+    /// does not require that requirement. Therefore, it does not perform null checks, which makes it more optimal.
+    private func _decodeDisplayString(byteArray: inout [UInt8]) throws -> RFC9651BareItem {
+        // String(validatingUTF8:) requires byteArray to be null-terminated.
+        byteArray.append(0)
+
+        let unicodeSequence = byteArray.withUnsafeBytes {
+            $0.withMemoryRebound(to: CChar.self) {
+                // This force-unwrap is safe, as the buffer must successfully bind to CChar.
+                String(validatingCString: $0.baseAddress!)
+            }
+        }
+
+        guard let unicodeSequence else {
+            throw StructuredHeaderError.invalidDisplayString
+        }
+
+        return .displayString(unicodeSequence)
     }
 
     private mutating func _parseParameters() throws -> OrderedMap<Key, RFC9651BareItem> {
@@ -522,11 +630,12 @@ extension RandomAccessCollection where Element == UInt8, SubSequence == Self {
 extension String {
     // This is the slow path, so we never inline this.
     @inline(never)
-    fileprivate static func decodingEscapes<Bytes: RandomAccessCollection>(_ bytes: Bytes, escapes: Int) -> String where Bytes.Element == UInt8 {
+    fileprivate static func decodingEscapes<Bytes: RandomAccessCollection>(_ bytes: Bytes, escapes: Int) -> String
+    where Bytes.Element == UInt8 {
         // We assume the string is previously validated, so the escapes are easily removed. See the doc comment for
         // `StrippingStringEscapesCollection` for more details on what we're doing here.
         let unescapedBytes = StrippingStringEscapesCollection(bytes, escapes: escapes)
-        if #available(macOS 10.16, macCatalyst 10.16, iOS 14.0, watchOS 7.0, tvOS 14.0, *) {
+        if #available(macOS 10.16, macCatalyst 14.0, iOS 14.0, watchOS 7.0, tvOS 14.0, *) {
             return String(unsafeUninitializedCapacity: unescapedBytes.count) { innerPtr in
                 let (_, endIndex) = innerPtr.initialize(from: unescapedBytes)
                 return endIndex
@@ -545,7 +654,8 @@ extension String {
 /// Until this issue is fixed (https://bugs.swift.org/browse/SR-13111) we take a different approach: we use
 /// `String.init(unsafeUninitializedCapacity:initializingWith)`. This is an unsafe function, so to reduce the unsafety as much
 /// as possible we define this safe wrapping Collection and then use `copyBytes` to implement the initialization.
-private struct StrippingStringEscapesCollection<BaseCollection: RandomAccessCollection> where BaseCollection.Element == UInt8 {
+private struct StrippingStringEscapesCollection<BaseCollection: RandomAccessCollection>
+where BaseCollection.Element == UInt8 {
     private var base: BaseCollection
     private var escapes: UInt
 
@@ -607,5 +717,41 @@ extension StrippingStringEscapesCollection.Index: Equatable {}
 extension StrippingStringEscapesCollection.Index: Comparable {
     fileprivate static func < (lhs: Self, rhs: Self) -> Bool {
         lhs._baseIndex < rhs._baseIndex
+    }
+}
+
+/// `EncodedHex` represents a (possibly invalid) hex value in UTF8.
+struct EncodedHex {
+    private(set) var firstChar: UInt8
+    private(set) var secondChar: UInt8
+
+    init<Bytes: RandomAccessCollection>(_ bytes: Bytes) where Bytes.Element == UInt8 {
+        precondition(bytes.count == 2)
+        self.firstChar = bytes[bytes.startIndex]
+        self.secondChar = bytes[bytes.index(after: bytes.startIndex)]
+    }
+
+    /// Validates and converts `EncodedHex` to a base 10 UInt8.
+    ///
+    /// If `EncodedHex` does not represent a valid hex value, the result of this method is nil.
+    fileprivate func decode() -> UInt8? {
+        guard
+            let firstCharAsInteger = self.htoi(self.firstChar),
+            let secondCharAsInteger = self.htoi(self.secondChar)
+        else { return nil }
+
+        return (firstCharAsInteger << 4) + secondCharAsInteger
+    }
+
+    /// Converts a hex character given in UTF8 to its integer value.
+    private func htoi(_ asciiChar: UInt8) -> UInt8? {
+        switch asciiChar {
+        case asciiZero...asciiNine:
+            return asciiChar - asciiZero
+        case asciiLowerA...asciiLowerF:
+            return asciiChar - asciiLowerA + 10
+        default:
+            return nil
+        }
     }
 }

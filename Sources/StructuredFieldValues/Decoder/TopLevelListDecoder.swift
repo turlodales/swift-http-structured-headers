@@ -66,18 +66,26 @@ extension TopLevelListDecoder: UnkeyedDecodingContainer {
             self.decoder.pop()
         }
 
-        if type is Data.Type {
+        switch type {
+        case is Data.Type:
             let container = try self.decoder.singleValueContainer()
             return try container.decode(Data.self) as! T
-        } else if type is Decimal.Type {
+        case is Decimal.Type:
             let container = try self.decoder.singleValueContainer()
             return try container.decode(Decimal.self) as! T
-        } else {
+        case is Date.Type:
+            let container = try self.decoder.singleValueContainer()
+            return try container.decode(Date.self) as! T
+        case is DisplayString.Type:
+            let container = try self.decoder.singleValueContainer()
+            return try container.decode(DisplayString.self) as! T
+        default:
             return try type.init(from: self.decoder)
         }
     }
 
-    mutating func nestedContainer<NestedKey>(keyedBy type: NestedKey.Type) throws -> KeyedDecodingContainer<NestedKey> where NestedKey: CodingKey {
+    mutating func nestedContainer<NestedKey>(keyedBy type: NestedKey.Type) throws -> KeyedDecodingContainer<NestedKey>
+    where NestedKey: CodingKey {
         // This is a request to decode a full item. We decode the next entry and increment the index.
         guard !self.isAtEnd else {
             throw StructuredHeaderError.indexOutOfRange

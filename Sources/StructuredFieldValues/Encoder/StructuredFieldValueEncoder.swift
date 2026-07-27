@@ -103,11 +103,16 @@ class _StructuredFieldEncoder {
 
     internal var keyEncodingStrategy: StructuredFieldValueEncoder.KeyEncodingStrategy?
 
-    init(_ serializer: StructuredFieldValueSerializer, keyEncodingStrategy: StructuredFieldValueEncoder.KeyEncodingStrategy?) {
+    init(
+        _ serializer: StructuredFieldValueSerializer,
+        keyEncodingStrategy: StructuredFieldValueEncoder.KeyEncodingStrategy?
+    ) {
         self.serializer = serializer
         self._codingPath = []
         self.keyEncodingStrategy = keyEncodingStrategy
-        self.currentStackEntry = CodingStackEntry(key: .init(stringValue: ""), storage: .itemHeader) // This default doesn't matter right now.
+
+        // This default doesn't matter right now.
+        self.currentStackEntry = CodingStackEntry(key: .init(stringValue: ""), storage: .itemHeader)
     }
 
     fileprivate func encodeDictionaryField<StructuredField: Encodable>(_ data: StructuredField) throws -> [UInt8] {
@@ -121,7 +126,7 @@ class _StructuredFieldEncoder {
             // No encoding happened.
             return []
         case .listHeader, .list, .itemHeader, .item, .bareInnerList, .innerList,
-             .parameters, .itemOrInnerList:
+            .parameters, .itemOrInnerList:
             throw StructuredHeaderError.invalidTypeForItem
         }
     }
@@ -137,7 +142,7 @@ class _StructuredFieldEncoder {
             // No encoding happened
             return []
         case .dictionaryHeader, .dictionary, .itemHeader, .item, .bareInnerList, .innerList,
-             .parameters, .itemOrInnerList:
+            .parameters, .itemOrInnerList:
             throw StructuredHeaderError.invalidTypeForItem
         }
     }
@@ -145,17 +150,20 @@ class _StructuredFieldEncoder {
     fileprivate func encodeItemField<StructuredField: Encodable>(_ data: StructuredField) throws -> [UInt8] {
         self.push(key: .init(stringValue: ""), newStorage: .itemHeader)
 
-        // There's an awkward special hook here: if the outer type is `Data` or `Decimal`,
-        // we skip the regular encoding path. This is because otherwise `Data` will
-        // ask for an unkeyed container and `Decimal` for a keyed one,
-        // and it all falls apart.
+        // There's an awkward special hook here: if the outer type is `Data`, `Decimal`, `Date` or
+        // `DisplayString`, we skip the regular encoding path.
         //
         // Everything else goes through the normal flow.
-        if let value = data as? Data {
-            try self.encode(value)
-        } else if let value = data as? Decimal {
-            try self.encode(value)
-        } else {
+        switch data {
+        case is Data:
+            try self.encode(data)
+        case is Decimal:
+            try self.encode(data)
+        case is Date:
+            try self.encode(data)
+        case is DisplayString:
+            try self.encode(data)
+        default:
             try data.encode(to: self)
         }
 
@@ -166,7 +174,7 @@ class _StructuredFieldEncoder {
             // No encoding happened
             return []
         case .dictionaryHeader, .dictionary, .listHeader, .list, .bareInnerList, .innerList,
-             .parameters, .itemOrInnerList:
+            .parameters, .itemOrInnerList:
             throw StructuredHeaderError.invalidTypeForItem
         }
     }
@@ -197,7 +205,7 @@ extension _StructuredFieldEncoder: Encoder {
     }
 
     func container<Key>(keyedBy type: Key.Type) -> KeyedEncodingContainer<Key> where Key: CodingKey {
-        return KeyedEncodingContainer(StructuredFieldKeyedEncodingContainer(encoder: self))
+        KeyedEncodingContainer(StructuredFieldKeyedEncodingContainer(encoder: self))
     }
 
     func unkeyedContainer() -> UnkeyedEncodingContainer {
@@ -255,6 +263,11 @@ extension _StructuredFieldEncoder: SingleValueEncodingContainer {
         try self._encodeFixedWidthInteger(value)
     }
 
+    @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+    func encode(_ value: Int128) throws {
+        try self._encodeFixedWidthInteger(value)
+    }
+
     func encode(_ value: UInt) throws {
         try self._encodeFixedWidthInteger(value)
     }
@@ -275,19 +288,33 @@ extension _StructuredFieldEncoder: SingleValueEncodingContainer {
         try self._encodeFixedWidthInteger(value)
     }
 
+    @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+    func encode(_ value: UInt128) throws {
+        try self._encodeFixedWidthInteger(value)
+    }
+
     func encode(_ data: Data) throws {
         let encoded = data.base64EncodedString()
         try self.currentStackEntry.storage.insertBareItem(.undecodedByteSequence(encoded))
     }
 
     func encode(_ data: Decimal) throws {
-        let significand = (data.significand.magnitude as NSNumber).intValue // Yes, really.
+        let significand = (data.significand.magnitude as NSNumber).intValue  // Yes, really.
         guard let exponent = Int8(exactly: data.exponent) else {
             throw StructuredHeaderError.invalidIntegerOrDecimal
         }
 
         let pd = PseudoDecimal(mantissa: significand * (data.isSignMinus ? -1 : 1), exponent: Int(exponent))
         try self.currentStackEntry.storage.insertBareItem(.decimal(pd))
+    }
+
+    func encode(_ data: Date) throws {
+        let date = Int64(data.timeIntervalSince1970)
+        try self.currentStackEntry.storage.insertBareItem(.date(date))
+    }
+
+    func encode(_ data: DisplayString) throws {
+        try self.currentStackEntry.storage.insertBareItem(.displayString(data.rawValue))
     }
 
     func encode<T>(_ value: T) throws where T: Encodable {
@@ -324,6 +351,10 @@ extension _StructuredFieldEncoder: SingleValueEncodingContainer {
             try self.encode(value)
         case let value as Decimal:
             try self.encode(value)
+        case let value as Date:
+            try self.encode(value)
+        case let value as DisplayString:
+            try self.encode(value)
         default:
             throw StructuredHeaderError.invalidTypeForItem
         }
@@ -336,7 +367,7 @@ extension _StructuredFieldEncoder: SingleValueEncodingContainer {
     }
 
     private func _encodeFixedWidthInteger<T: FixedWidthInteger>(_ value: T) throws {
-        guard let base = Int(exactly: value) else {
+        guard let base = Int64(exactly: value) else {
             throw StructuredHeaderError.integerOutOfRange
         }
         try self.currentStackEntry.storage.insertBareItem(.integer(base))
@@ -438,13 +469,22 @@ extension _StructuredFieldEncoder {
     }
 
     func append(_ value: Decimal) throws {
-        let significand = (value.significand.magnitude as NSNumber).intValue // Yes, really.
+        let significand = (value.significand.magnitude as NSNumber).intValue  // Yes, really.
         guard let exponent = Int8(exactly: value.exponent) else {
             throw StructuredHeaderError.invalidIntegerOrDecimal
         }
 
         let pd = PseudoDecimal(mantissa: significand * (value.isSignMinus ? -1 : 1), exponent: Int(exponent))
         try self.currentStackEntry.storage.appendBareItem(.decimal(pd))
+    }
+
+    func append(_ value: Date) throws {
+        let date = Int64(value.timeIntervalSince1970)
+        try self.currentStackEntry.storage.appendBareItem(.date(date))
+    }
+
+    func append(_ value: DisplayString) throws {
+        try self.currentStackEntry.storage.appendBareItem(.displayString(value.rawValue))
     }
 
     func append<T>(_ value: T) throws where T: Encodable {
@@ -481,6 +521,10 @@ extension _StructuredFieldEncoder {
             try self.append(value)
         case let value as Decimal:
             try self.append(value)
+        case let value as Date:
+            try self.append(value)
+        case let value as DisplayString:
+            try self.append(value)
         default:
             // Some other codable type.
             switch self.currentStackEntry.storage {
@@ -514,7 +558,7 @@ extension _StructuredFieldEncoder {
     }
 
     private func _appendFixedWidthInteger<T: FixedWidthInteger>(_ value: T) throws {
-        guard let base = Int(exactly: value) else {
+        guard let base = Int64(exactly: value) else {
             throw StructuredHeaderError.integerOutOfRange
         }
         try self.currentStackEntry.storage.appendBareItem(.integer(base))
@@ -601,17 +645,32 @@ extension _StructuredFieldEncoder {
 
     func encode(_ value: Data, forKey key: String) throws {
         let key = self.sanitizeKey(key)
-        try self.currentStackEntry.storage.insertBareItem(.undecodedByteSequence(value.base64EncodedString()), atKey: key)
+        try self.currentStackEntry.storage.insertBareItem(
+            .undecodedByteSequence(value.base64EncodedString()),
+            atKey: key
+        )
     }
 
     func encode(_ value: Decimal, forKey key: String) throws {
-        let significand = (value.significand.magnitude as NSNumber).intValue // Yes, really.
+        let significand = (value.significand.magnitude as NSNumber).intValue  // Yes, really.
         guard let exponent = Int8(exactly: value.exponent) else {
             throw StructuredHeaderError.invalidIntegerOrDecimal
         }
 
         let pd = PseudoDecimal(mantissa: significand * (value.isSignMinus ? -1 : 1), exponent: Int(exponent))
         try self.currentStackEntry.storage.insertBareItem(.decimal(pd), atKey: key)
+    }
+
+    func encode(_ value: Date, forKey key: String) throws {
+        let key = self.sanitizeKey(key)
+        let date = Int64(value.timeIntervalSince1970)
+        try self.currentStackEntry.storage.insertBareItem(.date(date), atKey: key)
+    }
+
+    func encode(_ value: DisplayString, forKey key: String) throws {
+        let key = self.sanitizeKey(key)
+        let displayString = value.rawValue
+        try self.currentStackEntry.storage.insertBareItem(.displayString(displayString), atKey: key)
     }
 
     func encode<T>(_ value: T, forKey key: String) throws where T: Encodable {
@@ -649,6 +708,10 @@ extension _StructuredFieldEncoder {
         case let value as Data:
             try self.encode(value, forKey: key)
         case let value as Decimal:
+            try self.encode(value, forKey: key)
+        case let value as Date:
+            try self.encode(value, forKey: key)
+        case let value as DisplayString:
             try self.encode(value, forKey: key)
         default:
             // Ok, we don't know what this is. This can only happen for a dictionary, or
@@ -715,14 +778,14 @@ extension _StructuredFieldEncoder {
                 }
 
             case .list, .itemHeader, .bareInnerList,
-                 .parameters:
+                .parameters:
                 throw StructuredHeaderError.invalidTypeForItem
             }
         }
     }
 
     private func _encodeFixedWidthInteger<T: FixedWidthInteger>(_ value: T, forKey key: String) throws {
-        guard let base = Int(exactly: value) else {
+        guard let base = Int64(exactly: value) else {
             throw StructuredHeaderError.integerOutOfRange
         }
         try self.currentStackEntry.storage.insertBareItem(.integer(base), atKey: key)
@@ -914,10 +977,12 @@ extension _StructuredFieldEncoder {
 
             case .itemOrInnerList(let params):
                 // This is an inner list.
-                self = .innerList(InnerList(bareInnerList: [Item(bareItem: bareItem, parameters: [:])], parameters: params))
+                self = .innerList(
+                    InnerList(bareInnerList: [Item(bareItem: bareItem, parameters: [:])], parameters: params)
+                )
 
             case .dictionaryHeader, .dictionary, .itemHeader, .item,
-                 .parameters:
+                .parameters:
                 throw StructuredHeaderError.invalidTypeForItem
             }
         }
